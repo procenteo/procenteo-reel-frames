@@ -1,0 +1,93 @@
+# reel-frames: a public reel read from the web, decoded into one plain picture every 2 seconds and one text of what is said
+# (design/2026-11-24-reel-read-from-the-web.md in the team's repository, where this file is kept and checked; Michał, 24 Nov: "watch reel via the web and don't reinvent a wheel").
+# It runs only as .github/workflows/reel-frames.yml of procenteo/procenteo-reel-frames, a public repository of its own that holds this file alone, deploys nothing and holds no
+# secret, so a run made to mislead reaches that repository's own run files and nothing of ours (the adversary, 24 Nov: outsiders' videos never in the repository that deploys
+# the live app); committed there by Michał's own hand, and started by the box only while this file's git blob id is the one both checks read. Our server never touches
+# Instagram (his rule of 19 Nov) and decodes nothing (20 Nov). No job holds a token. The reader of reels is yt-dlp, the open downloader most reel services wrap, at its
+# newest release on purpose: Instagram changes often and an old reader stops reading; named, not cured: a release made to mislead writes this run's files alone, and the box
+# reads them as an outsider's. The decoding is the film road's (design/film-frames.yml in the team's repository), each side with its own file: job 3 ends before job 2 starts,
+# and a second file under a name the run already holds fails the run. GitHub's two actions stand by their exact release tags (D131).
+name: reel-frames
+on:
+  workflow_dispatch:
+    inputs:
+      reel:
+        description: the reel's id, the part of its address after /reel/
+        required: true
+      start:
+        description: the second of the first picture, 0.0 to 1.9, drawn by the box
+        required: true
+permissions: {}
+jobs:
+  reel:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - name: the reel, read from the web by yt-dlp, 100 MB at most
+        env:
+          REEL: ${{ inputs.reel }}
+        run: |
+          [[ "$REEL" =~ ^[A-Za-z0-9_-]{5,20}$ ]] || { echo "the reel's id is no id"; exit 1; }
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          python3 -m venv dl && dl/bin/pip install -q --upgrade yt-dlp
+          dl/bin/yt-dlp --version
+          dl/bin/yt-dlp --no-playlist --no-warnings --max-filesize 100M -f "bv*+ba/b" --merge-output-format mp4 -o reel.mp4 "https://www.instagram.com/reel/$REEL/"
+          test -s reel.mp4 && sha256sum reel.mp4 | cut -c1-12
+      - uses: actions/upload-artifact@v4.6.2
+        with:
+          name: reel
+          path: reel.mp4
+          retention-days: 1
+          if-no-files-found: error
+  frames:
+    needs: [reel, said]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions: {}
+    steps:
+      - uses: actions/download-artifact@v4.3.0
+        with:
+          name: reel
+      - name: a decoder, from the runner's own package source
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      - name: one plain picture every 2 seconds from the drawn moment, 90 at most
+        env:
+          START: ${{ inputs.start }}
+        run: |
+          [[ "$START" =~ ^[01]\.[0-9]$ ]] || { echo "the start is no moment between 0.0 and 1.9"; exit 1; }
+          mkdir out
+          ffmpeg -v error -ss "$START" -i reel.mp4 -vf "fps=1/2,scale='min(1280,iw)':-2" -pix_fmt rgb24 -frames:v 90 "out/picture-%03d.png"
+          echo "start $START · reel seconds $(ffprobe -v error -show_entries format=duration -of csv=p=0 reel.mp4 | cut -d. -f1) · one picture every 2 seconds, the first 90" > out/seconds.txt
+      - uses: actions/upload-artifact@v4.6.2
+        with:
+          name: frames
+          path: out
+          retention-days: 1
+          if-no-files-found: error
+  said:
+    needs: reel
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions: {}
+    steps:
+      - uses: actions/download-artifact@v4.3.0
+        with:
+          name: reel
+      - name: what is said, by an open speech model that runs here (the film road's exact versions)
+        run: |
+          python3 -m venv speech && speech/bin/pip install -q faster-whisper==1.2.1 av==18.1.0
+          mkdir out
+          speech/bin/python - <<'PY'
+          from faster_whisper import WhisperModel
+          parts, heard = WhisperModel("medium", device="cpu", compute_type="int8").transcribe("reel.mp4", vad_filter=True)
+          lines = [f"language {heard.language}"] + [f"{part.start:.0f}-{part.end:.0f} {part.text.strip()}" for part in parts]
+          open("out/said.txt", "w", encoding="utf-8").write("\n".join(lines) + "\n")
+          PY
+      - uses: actions/upload-artifact@v4.6.2
+        with:
+          name: said
+          path: out
+          retention-days: 1
+          if-no-files-found: error
